@@ -22,8 +22,9 @@ docker run --rm --pull never \
   python /opt/document-tools/tool.py selfcheck
 ```
 
-部署方必须自行构建、校验并获取执行环境可用的镜像 digest，以及 manifest/Skill
-字节 hash，再创建对应 profile。构建需要下载固定的上游依赖，不属于离线包验证。
+部署方必须自行构建、校验并获取执行环境可用的镜像引用（建议使用 digest），
+填入 `Profile.image`，并向示例装配传入 Skill manifest 的字节 SHA-256。构建需要
+下载固定的上游依赖，不属于离线包验证。
 
 构建配置固定 Python parent index、Debian snapshot、直接 OS 包版本与 Python wheel hash。
 镜像不含 Pydantic AI、OpenAI、Temporal、OpenSandbox SDK 或业务后端/数据库客户端。
@@ -31,7 +32,8 @@ SDK 运行需要 execd 的 root bootstrap；文档入口通过 `runuser -u app` 
 generate/revise/slice/render 接受结构化参数，不接受源码、shell 或运行时安装。
 submit 前检查 `/output` 普通文件，拒绝符号链接/特殊节点后封存并下载。
 
-Skill manifest 位于 `/opt/document-tools/skills-manifest.json`，profile 固定其字节 hash。
+Skill manifest 位于 `/opt/document-tools/skills-manifest.json`；由
+`examples/bindings.py` 中的 DOCX 装配显式验证，不是通用 OpenSandbox 协议。
 当轮 VFS 的 `/skills` 不授予额外工具权限。wheel 不携带这些 OS 工具；sdist 包含镜像源码
 与 Skill，镜像上下文由白名单限定为 image 与 skills。
 

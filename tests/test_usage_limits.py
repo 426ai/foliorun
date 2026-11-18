@@ -80,7 +80,7 @@ async def test_actual_agent_105_requests_104_tools_explicit_sdk_none(case, monke
 
     monkeypatch.setattr(adapter, "UsageLimits", capture)
     c.executor.harness = adapter.PydanticHarness(
-        model_factory=lambda: (Client(), FunctionModel(respond))
+        model_factory=lambda: (Client(), FunctionModel(respond, model_name=c.profile.model))
     )
     handle = await c.runtime.submit(
         prompt="Entirely fictional counts", vfs=c.vfs, tools=c.tools, idempotency_key="counts"

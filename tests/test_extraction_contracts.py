@@ -1,6 +1,8 @@
 """Offline migration boundaries and real Temporal SDK loading; no service processes."""
 
+import tomllib
 from importlib.metadata import version
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -11,7 +13,7 @@ from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 from foliorun import Handle, Profile, __version__
 from foliorun.adapters.temporal import TemporalScheduler
 from foliorun.adapters.temporal_workflow import DocumentWorkflow, DocumentWorkflowV03
-from foliorun.contracts import PROTOCOL, VERSION, BlobRef, Checkpoint, JobSpec
+from foliorun.contracts import PROFILE_SCHEMA, PROTOCOL, VERSION, BlobRef, Checkpoint, JobSpec
 
 
 @pytest.mark.parametrize("old_version", ["0.2.0", "0.2.1"])
@@ -32,9 +34,12 @@ def test_old_persisted_versions_require_explicit_migration(case, old_version):
         )
 
 
-def test_first_package_version_is_independent_of_protocol(case):
-    assert version("foliorun") == __version__ == VERSION == "0.1.0"
+def test_distribution_version_is_independent_of_protocol(case):
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    declared_version = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
+    assert version("foliorun") == __version__ == VERSION == declared_version
     assert case.profile.package_version == "0.1.0"
+    assert case.profile.schema_version == PROFILE_SCHEMA == "0.4"
     assert Profile.model_validate_json(case.profile.model_dump_json()) == case.profile
     blob = case.store.put(b"Entirely fictional checkpoint")
     checkpoint = case.harness.checkpoint(blob, blob)

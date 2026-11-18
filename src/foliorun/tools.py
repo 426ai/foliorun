@@ -26,7 +26,7 @@ class ToolSpec(Frozen):
 class SandboxCommand(Frozen):
     """Name of a host-injected preinstalled provider binding, never a model-selected argv."""
 
-    entrypoint: str = "docx"
+    entrypoint: str
 
 
 @dataclass(frozen=True)

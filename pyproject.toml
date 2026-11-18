@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "foliorun"
-version = "0.1.0"
+version = "0.1.1.dev4"
 description = "Durable host agents and disposable document tool sandboxes"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
@@ -12,7 +12,8 @@ dependencies = ["pydantic>=2.13,<3", "jsonschema>=4.23,<5"]
 
 [project.optional-dependencies]
 temporal = ["temporalio==1.33.0"]
-pydantic-ai = ["pydantic-ai-slim[openai]==2.61.0", "openai==3.51.0"]
+pydantic-ai = ["pydantic-ai-slim==2.61.0"]
+pydantic-ai-openai = ["pydantic-ai-slim[openai]==2.61.0", "openai==3.51.0"]
 opensandbox = ["opensandbox==0.1.16"]
 test = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "httpx>=0.28,<1", "ruff>=0.11"]
 

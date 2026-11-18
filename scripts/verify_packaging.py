@@ -163,7 +163,11 @@ def check_installations(wheel):
         )
         constraint_file = directory / "constraints.txt"
         constraint_file.write_text(constraints["stdout"])
-        for name, suffix in (("core", ""), ("extras", "[temporal,pydantic-ai,opensandbox,test]")):
+        for name, suffix in (
+            ("core", ""),
+            ("pydantic", "[pydantic-ai]"),
+            ("extras", "[temporal,pydantic-ai-openai,opensandbox,test]"),
+        ):
             environment = directory / name
             results[name + "_venv"] = run(
                 ["uv", "venv", "--python", "3.12", str(environment)], directory
@@ -195,6 +199,12 @@ optional = ["pydantic_ai", "temporalio", "opensandbox", "openai"]
 """
             if name == "core":
                 check += "\nassert all(importlib.util.find_spec(n) is None for n in optional)\n"
+            elif name == "pydantic":
+                check += """
+from foliorun.adapters.pydantic_ai import PydanticHarness
+assert md.version("pydantic-ai-slim") == "2.61.0"
+assert all(importlib.util.find_spec(n) is None for n in optional[1:])
+"""
             else:
                 check += """
 assert all(importlib.util.find_spec(n) is not None for n in optional)
@@ -219,6 +229,7 @@ print(json.dumps({"version": foliorun.__version__, "module": foliorun.__file__,
             directory / "tests",
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
+        shutil.copyfile(ROOT / "pyproject.toml", directory / "pyproject.toml")
         results["core_offline_example"] = run(
             [str(directory / "core/bin/python"), "-I", "examples/offline.py"], directory
         )
@@ -226,13 +237,25 @@ print(json.dumps({"version": foliorun.__version__, "module": foliorun.__file__,
             [str(directory / "core/bin/python"), "-I", "examples/custom_storage.py"], directory
         )
         results["offline_session_example"] = run(
-            [str(directory / "extras/bin/python"), "-I", "examples/offline_session.py"], directory
+            [str(directory / "pydantic/bin/python"), "-I", "examples/offline_session.py"], directory
+        )
+        results["offline_injection_example"] = run(
+            [str(directory / "pydantic/bin/python"), "-E", "-s", "examples/offline_injection.py"],
+            directory,
+        )
+        results["offline_exec_example"] = run(
+            [str(directory / "pydantic/bin/python"), "-E", "-s", "examples/offline_exec.py"],
+            directory,
+        )
+        results["live_assembly_cli_help"] = run(
+            [str(directory / "extras/bin/python"), "-E", "-s", "examples/client.py", "--help"],
+            directory,
         )
         results["extras_offline_tests"] = run(
             [str(directory / "extras/bin/python"), "-I", "tests/offline_runner.py", "-q"],
             directory,
         )
-        for name in ("core", "extras"):
+        for name in ("core", "pydantic", "extras"):
             results[name + "_dependencies"] = run(
                 [
                     "uv",

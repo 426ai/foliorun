@@ -16,9 +16,9 @@ from pydantic import (
     model_validator,
 )
 
-VERSION = "0.1.0"
+VERSION = "0.1.1.dev4"
 PROTOCOL = "0.3"
-MODEL = "deepseek/deepseek-v4.1-flash-1017"
+PROFILE_SCHEMA = "0.4"
 Sha256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 
 
@@ -87,13 +87,6 @@ class SafeError(Frozen):
     truncated: bool | None = Field(default=None, strict=True)
     model_request_index: Annotated[int, Field(strict=True, ge=1)] | None = None
     http_status: Annotated[int, Field(strict=True, ge=100, le=599)] | None = None
-
-
-class ModelConfig(Frozen):
-    """OpenRouter output ceiling and declared effort, not request or monetary budgets."""
-
-    max_tokens: Annotated[int, Field(strict=True, ge=1)] | None = None
-    reasoning_effort: Literal["max", "high", "low", "none"] | None = None
 
 
 class BlobRef(Frozen):
@@ -174,7 +167,7 @@ class Limits(Frozen):
 
 
 class Profile(Frozen):
-    schema_version: Literal["0.3"] = PROTOCOL
+    schema_version: Literal["0.4"] = PROFILE_SCHEMA
     name: str
     version: str
     # Persisted compatibility identity is independent of distribution releases.
@@ -184,14 +177,10 @@ class Profile(Frozen):
     checkpoint_format: str = "pydantic-messages-v1"
     sandbox: str = "opensandbox"
     sdk_version: str = "0.1.16"
-    model: Literal["deepseek/deepseek-v4.1-flash-1017"] = MODEL
+    model: str
     image: str
-    image_manifest: Sha256
-    skills_manifest: Sha256
     allowed_tools: tuple[str, ...]
     limits: Limits = Limits()
-    # Omitting this field preserves pre-candidate profile bytes and binding hashes.
-    model_settings: ModelConfig | None = Field(default=None, exclude_if=lambda v: v is None)
     retention_seconds: int = Field(default=604800, ge=3600)
     collection_seconds: int = Field(default=1800, ge=60, le=86400)
     fallback: FallbackPolicy = FallbackPolicy()
@@ -206,6 +195,8 @@ class Profile(Frozen):
             and (persisted or "package_version" in value)
         ):
             raise ValueError("legacy_profile_requires_explicit_migration")
+        if isinstance(value, dict) and value.get("schema_version") == "0.3":
+            raise ValueError("profile_requires_explicit_reconfiguration")
         return value
 
     @classmethod
@@ -213,11 +204,13 @@ class Profile(Frozen):
         context = {**(kwargs.pop("context", None) or {}), "persisted_profile": True}
         return super().model_validate(obj, context=context, **kwargs)
 
-    @field_validator("image")
+    @field_validator("model", "image")
     @classmethod
-    def immutable_image(cls, value):
-        if not re.fullmatch(r"[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}", value):
-            raise RuntimeFault("immutable_image_required")
+    def explicit_reference(cls, value):
+        if not value or any(
+            character.isspace() or not character.isprintable() for character in value
+        ):
+            raise ValueError("invalid_reference")
         return value
 
     def ref(self):

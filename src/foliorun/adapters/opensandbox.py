@@ -1,9 +1,12 @@
-"""OpenSandbox 0.1.16 adapter. Only fixed, foreground image capabilities run as app."""
+"""OpenSandbox 0.1.16 adapter for trusted, caller-configured tool images."""
+
+from __future__ import annotations
 
 import json
 import mimetypes
 import shlex
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import timedelta
@@ -16,7 +19,7 @@ from opensandbox.models.execd import RunCommandOpts
 from opensandbox.models.filesystem import WriteEntry
 from opensandbox.sandbox import Sandbox
 
-from ..contracts import AdapterDescriptor, RuntimeFault, canonical, digest, path_checked
+from ..contracts import AdapterDescriptor, Profile, RuntimeFault, canonical, digest, path_checked
 
 
 @dataclass(frozen=True)
@@ -28,9 +31,6 @@ class PreinstalledTool:
     def __post_init__(self):
         if not self.argv or any(not v or "\x00" in v for v in self.argv):
             raise RuntimeFault("invalid_tool_binding")
-
-
-DOCX_BINDING = PreinstalledTool(("python", "/opt/document-tools/tool.py", "execute"))
 
 
 async def download_binary(box, path, limit):
@@ -53,24 +53,27 @@ class OpenSandboxProvider:
     def __init__(
         self,
         *,
-        api_key: str,
-        endpoint: str,
-        owner="foliorun",
+        connection: ConnectionConfig,
+        owner: str,
+        seal_argv: tuple[str, ...],
         tools: dict[str, PreinstalledTool] | None = None,
-        seal_argv=("python", "/opt/document-tools/tool.py", "seal"),
+        verify_image: Callable[[OpenSandboxSession, Profile], Awaitable[None]] | None = None,
+        resource: dict[str, str] | None = None,
+        entrypoint: tuple[str, ...] | None = None,
     ):
-        self.owner = owner
-        self.tools = dict(tools) if tools is not None else {"docx": DOCX_BINDING}
-        self.seal_argv = tuple(seal_argv)
-        if not api_key or any(c.isspace() for c in api_key):
+        if not connection.api_key or any(character.isspace() for character in connection.api_key):
             raise RuntimeFault("opensandbox_key_required")
-        self.connection = ConnectionConfig(
-            domain=endpoint,
-            protocol="http",
-            api_key=api_key,
-            use_server_proxy=True,
-            request_timeout=timedelta(seconds=140),
-        )
+        if not connection.domain or not connection.domain.strip():
+            raise RuntimeFault("opensandbox_endpoint_required")
+        if not owner.strip():
+            raise RuntimeFault("opensandbox_owner_required")
+        self.connection = connection
+        self.owner = owner
+        self.tools = dict(tools or {})
+        self.seal_argv = PreinstalledTool(seal_argv).argv
+        self.verify_image = verify_image
+        self.resource = dict(resource) if resource is not None else {"cpu": "1", "memory": "2Gi"}
+        self.entrypoint = PreinstalledTool(entrypoint).argv if entrypoint is not None else None
 
     async def create(self, profile, run_id, scope):
         box = await Sandbox.create(
@@ -80,7 +83,8 @@ class OpenSandboxProvider:
                 seconds=profile.limits.deadline_seconds + profile.collection_seconds + 120
             ),
             ready_timeout=timedelta(seconds=60),
-            resource={"cpu": "1", "memory": "2Gi"},
+            resource=self.resource,
+            entrypoint=list(self.entrypoint) if self.entrypoint is not None else None,
             metadata={"owner": self.owner, "scope": scope, "run_id": run_id},
         )
         session = OpenSandboxSession(box, tools=self.tools, seal_argv=self.seal_argv)
@@ -88,6 +92,8 @@ class OpenSandboxProvider:
             await session.verify_retention(
                 int(time.time()) + profile.limits.deadline_seconds + profile.collection_seconds
             )
+            if self.verify_image is not None:
+                await self.verify_image(session, profile)
         except BaseException:
             await session.destroy()
             raise
@@ -140,8 +146,8 @@ class OpenSandboxSession:
         self.box = box
         self.id = str(box.id)
         self.sealed = sealed
-        self.tools = dict(tools) if tools is not None else {"docx": DOCX_BINDING}
-        self.seal_argv = seal_argv or ("python", "/opt/document-tools/tool.py", "seal")
+        self.tools = dict(tools or {})
+        self.seal_argv = seal_argv
         self.retain_until = 0
 
     async def verify_retention(self, retain_until):
@@ -165,17 +171,7 @@ class OpenSandboxSession:
     async def prepare(self, files, store, profile):
         await self.command(["mkdir", "-p", "/output", "/workspace", "/previous"])
         await self.command(["chown", "app:app", "/output", "/workspace"])
-        # Verify the image's Skill asset identity independently of caller VFS data.
-        body = await download_binary(self.box, "/opt/document-tools/skills-manifest.json", 65536)
-        if digest(body) != profile.skills_manifest:
-            raise RuntimeFault("image_skills_mismatch")
-        for relative, expected in json.loads(body)["files"].items():
-            path = path_checked("/skills/" + relative)
-            data = await download_binary(self.box, path, 131072)
-            if digest(data) != expected:
-                raise RuntimeFault("image_skills_mismatch")
-        # Caller /skills is its own snapshot. Remove preinstalled Skill tree before replacing
-        # only when a caller supplies /skills; the image declaration above remains verified.
+        # Caller /skills is its own snapshot, not an overlay on preinstalled assets.
         if any(p.startswith("/skills/") for p in files):
             await self.command(["rm", "-rf", "/skills"])
         # Empty, root-owned input roots are visible; file bodies are uploaded only on demand.
@@ -224,6 +220,8 @@ class OpenSandboxSession:
         return {"kind": "json", "value": result}
 
     async def seal(self, paths, limits):
+        if self.seal_argv is None:
+            raise RuntimeFault("sandbox_seal_binding_required")
         if not 0 < len(paths) <= limits.files or len(set(paths)) != len(paths):
             raise RuntimeFault("file_budget")
         for p in paths:

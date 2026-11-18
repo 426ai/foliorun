@@ -19,6 +19,45 @@ The supported production adapters are Pydantic AI 2.61.0, Temporal 1.33.0 and
 OpenSandbox 0.1.16. Core consumes replaceable adapter descriptors rather than
 closed vendor literals. Replacement does not establish conformance by itself.
 
+### Model And Image Bindings
+
+Pass a native model as `PydanticHarness(model=...)`. A synchronous trusted
+`model_factory=` can return a native model or `(async_closeable, model)` for
+each round. The host owns the lifetime of the directly supplied model and a
+bare factory result; the harness closes an explicitly transferred client after
+the round. A model must support the used tools and have a `model_name` equal to
+`Profile.model`. `Profile.model` is public binding metadata, not a selection
+string for SDK provider discovery. Native settings and credentials stay on the
+host; the journal fingerprints public binding metadata and request content,
+not the native settings/client/headers. Do not insert secrets into prompts,
+files, tool arguments/results or provider messages. Keep any host SDK tracing
+and debug logging from recording credential-bearing data.
+
+Use the same `Profile` and trusted assembly on submitters and workers. Bump
+`Profile.version` for changes to the provider/endpoint, native settings or SDK
+request behavior, or to the image resolution or sandbox bindings when the
+declared ref does not change. This is a host assertion, not automatic runtime
+attestation. Use a fresh idempotency key and a fresh session. Credential
+rotation alone need not change a public binding unless it also changes routing
+or execution semantics.
+
+The OpenSandbox adapter takes native `ConnectionConfig` with an explicit
+`domain` and `api_key`, an owner namespace unique to the deployment, and a
+trusted `seal_argv`. No vendor environment lookup is used by the adapter.
+It passes `Profile.image` to the SDK without interpreting tags/IDs/digests.
+Its resource request defaults to one CPU and two GiB, overridable by `resource`.
+The SDK's keepalive is used unless `entrypoint` is supplied. Supply per-tool
+argv through `PreinstalledTool`, never through model arguments. An optional
+`verify_image(session, profile)` executes after TTL verification and before
+input preparation. Use it for deployment-specific image/Skill attestation;
+immutable, trusted image selection and network isolation are host policies.
+
+The bundled DOCX deployment example reads `MODEL_BASE_URL`, `MODEL_API_KEY`,
+`TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE`,
+`OPENSANDBOX_ENDPOINT`, `OPENSANDBOX_PROTOCOL`, `OPENSANDBOX_API_KEY`,
+`OPENSANDBOX_OWNER`, and `DOCUMENT_SKILLS_SHA256` from its own host environment.
+Those names are example wiring, not framework requirements.
+
 ## Temporal
 
 Use matching workflow/Activity registrations on an isolated queue. The source
@@ -79,10 +118,11 @@ reconstruct an absent native checkpoint or reconcile an unknown seal command.
 Such a run cannot become a successful session through normal collection
 recovery. Do not use this as authorization to rerun the model.
 
-Inputs are uploaded only when selected through materialization. Default image
-Skill bytes are independently verified during prepare, not caller VFS bodies.
-Root bootstrap, execd, image code, tool bindings and the generic sealer are
-trusted. Programs must finish in the foreground with no background writers.
+Inputs are uploaded only when selected through materialization. Caller Skill
+files remain part of the frozen VFS; they don't select tool bindings or image
+verification policy. Root bootstrap, execd, image code, tool bindings and the
+configured sealer are trusted. Programs must finish in the foreground with no
+background writers.
 This is not a network-isolation or hostile-root containment guarantee.
 
 ## Sessions And Retention

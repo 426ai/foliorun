@@ -171,9 +171,8 @@ def case(tmp_path):
     profile = Profile(
         name="demo",
         version="1",
+        model="fictional-model",
         image="localhost/demo@sha256:" + "a" * 64,
-        image_manifest="b" * 64,
-        skills_manifest="c" * 64,
         allowed_tools=("lookup_record",),
         retention_seconds=3600,
     )

@@ -105,11 +105,6 @@ class SyntheticScheduler:
         return self.executor.cancel_fence(handle.run_id)
 
 
-class SyntheticClient:
-    async def close(self):
-        pass
-
-
 def respond(messages, info):
     part = messages[-1].parts[0]
     if part.part_kind == "user-prompt":
@@ -134,8 +129,7 @@ async def main():
             name="fictional-demo",
             version="1",
             image="localhost/demo@sha256:" + "a" * 64,
-            image_manifest="b" * 64,
-            skills_manifest="c" * 64,
+            model="fictional-function-model",
             allowed_tools=(),
             sandbox="synthetic-demo",
             sdk_version="1",
@@ -143,7 +137,7 @@ async def main():
         tools, bindings = ToolRegistry("fictional-empty", "1", release="1"), WorkerBindings()
         bindings.install_tools(tools)
         provider = SyntheticProvider()
-        harness = PydanticHarness(model_factory=lambda: (SyntheticClient(), FunctionModel(respond)))
+        harness = PydanticHarness(model=FunctionModel(respond, model_name=profile.model))
         executor = Executor(store=store, bindings=bindings, sandbox=provider, harness=harness)
         scheduler = SyntheticScheduler(executor)
         runtime = Runtime(config=RuntimeConfig(profile, scheduler), bindings=bindings, store=store)

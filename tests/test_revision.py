@@ -292,7 +292,9 @@ async def test_real_function_model_second_file_failure_recovery_keeps_request_co
         return box
 
     c.provider.create = with_outputs
-    c.executor.harness = PydanticHarness(model_factory=lambda: (Client(), FunctionModel(respond)))
+    c.executor.harness = PydanticHarness(
+        model_factory=lambda: (Client(), FunctionModel(respond, model_name=c.profile.model))
+    )
     original = c.store.blob_store.put
 
     def fail(data):
