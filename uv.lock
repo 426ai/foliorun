@@ -115,7 +115,7 @@ wheels = [
 
 [[package]]
 name = "foliorun"
-version = "0.1.1.dev4"
+version = "0.1.1.dev5"
 source = { editable = "." }
 dependencies = [
     { name = "jsonschema" },

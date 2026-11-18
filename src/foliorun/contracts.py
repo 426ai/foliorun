@@ -16,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-VERSION = "0.1.1.dev4"
+VERSION = "0.1.1.dev5"
 PROTOCOL = "0.3"
 PROFILE_SCHEMA = "0.4"
 Sha256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]

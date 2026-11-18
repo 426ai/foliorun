@@ -123,6 +123,9 @@ Input roots: `/documents`, `/materials`, `/inputs`, `/skills`. Inputs and
 returns size and SHA-256 for a known input, previous file or current `/output`
 file. `read_file` reads UTF-8 text from those same paths, using Unicode character
 offsets and bounded JSON pages. Follow `next_offset` until `eof` is true.
+If a verified frozen input is not supported UTF-8 text, `read_file` returns a
+[code-only error](docs/tool-errors.md) so the model can choose an authorized
+alternative in the same run.
 Current outputs are read inside this run's sandbox; input text comes from the
 verified VFS. Workspace files, other runs, links and arbitrary host paths are
 not readable through these interfaces. Output inspection does not seal or submit.

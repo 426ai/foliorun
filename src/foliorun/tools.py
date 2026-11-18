@@ -250,6 +250,10 @@ class Gateway:
             Draft202012Validator(declarations[name]["input_schema"]).validate(args)
         except Exception:
             raise RuntimeFault("tool_arguments_invalid") from None
+        if name == "read_file" and any(
+            type(args[field]) is not int for field in ("offset", "length") if field in args
+        ):
+            raise RuntimeFault("tool_arguments_invalid")
         self.calls += 1
         limit = self.job.limits.tools
         if limit is not None and self.calls > limit:
@@ -348,7 +352,8 @@ class Gateway:
             if inspect is None:
                 raise RuntimeFault("file_inspection_unavailable")
             return await inspect(path, limits, read=read, offset=offset, length=length)
-        if path.startswith("/previous/"):
+        previous = path.startswith("/previous/")
+        if previous:
             path_checked("/output/" + path.removeprefix("/previous/"), output=True)
         else:
             path_checked(path)
@@ -365,4 +370,7 @@ class Gateway:
         try:
             return text_page(body, offset, length, limits.text_bytes)
         except InspectionFault as exc:
-            raise RuntimeFault(str(exc)) from None
+            code = str(exc)
+            if not previous and code in {"file_not_utf8", "file_not_text"}:
+                return {"kind": "json", "value": {"error": {"code": code}}}
+            raise RuntimeFault(code) from None

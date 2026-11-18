@@ -17,13 +17,14 @@ background writers. Inspection observes a file at that time: it is not a seal,
 publication or a guarantee that a later read/submission sees identical bytes.
 `submit_result` still seals and collects independently.
 
-Both responses are closed JSON objects:
+Successful reads and stats return closed JSON objects:
 
 - `stat_file`: `{"kind":"json","value":{"path":str,"size":int,"sha256":str}}`.
   `size` is a nonnegative byte count and `sha256` is 64 lowercase hex characters.
 - `read_file`: `{"kind":"json","value":{"text":str,"next_offset":int,"eof":bool}}`.
   Offsets/length count Unicode characters; `next_offset=offset+len(text)`.
-  Length is a positive integer up to `Limits.text_bytes`. JSON envelope and
+  Supply pagination arguments as integers (not floating-point numbers).
+  Length is positive and at most `Limits.text_bytes`. JSON envelope and
   escaping count toward that byte budget; the returned page may be shorter.
   Empty files and offsets beyond EOF return empty text with `eof=true`.
 
@@ -31,6 +32,24 @@ Text must be UTF-8 without control characters other than tab, newline and
 carriage return. Binary files can be inspected for size/hash, but cannot be
 read as text. Large files may be read in text pages only within the total
 output file byte limit. `/workspace` is not an inspection root.
+
+## Correctable Frozen Input Reads
+
+For `read_file` on a canonical path in the authorized frozen input catalog, after
+the bytes pass integrity verification, invalid UTF-8 returns exactly
+`{"kind":"json","value":{"error":{"code":"file_not_utf8"}}}`. Valid UTF-8 with
+unsupported controls returns the same shape with `file_not_text`. Neither result
+includes file bytes, file paths, arguments, or exception details. Consumers of
+`read_file` tool returns must distinguish the error object from a text page.
+The result still counts as a tool call and must fit the normal result byte budget.
+
+The gateway journals the result as `done` before returning it. A matching call
+ID and identity can reuse that result under the existing guards; an incomplete
+intent still requires review. This does not retry the read, reset budgets, or
+submit anything. The model may choose a different authorized tool in the same run,
+such as `stat_file` for metadata or an approved tool for that file type.
+`/previous` and `/output` text errors remain fatal, as do failures to retrieve or
+verify frozen input bytes. Storage and sandbox faults are not tool results.
 
 ## Product Error Projection
 
@@ -52,7 +71,7 @@ do not serialize raw exceptions, private journals/checkpoints or SDK objects.
 | `output_unsafe_file` | `FAILED` | Link, special file or unsafe/inaccessible filesystem entry |
 | `output_changed` | `FAILED` | File size/identity/timestamps changed during inspection |
 | `file_too_large` | `FAILED` | Current output exceeds the output file byte bound |
-| `file_not_utf8`, `file_not_text` | `FAILED` | File cannot be read as supported text |
+| `file_not_utf8`, `file_not_text` | `FAILED` | File cannot be read as supported text outside the correctable frozen-input path |
 | `file_page_budget` | `FAILED` | Even a progress-making text page cannot fit the JSON byte limit |
 | `file_inspection_unavailable` | `FAILED` | Custom sandbox session lacks safe inspection support |
 | `file_inspection_invalid` | `FAILED` | Inspector returned a malformed or unrecognized result/code |
@@ -74,4 +93,5 @@ Tools use durable intent-before-send journals. A rejected call may leave an
 intent; reusing an incomplete call ID fails as `unknown_tool_window`. No new
 automatic retry or error-to-model retry loop is introduced. Cancellation is
 checked before dispatch and after the result; collection and publication
-fences remain in force. Failed inspection never creates a successful revision.
+fences remain in force. A fatal inspection error never creates a successful
+revision.

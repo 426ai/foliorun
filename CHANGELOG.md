@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1.dev5
+
+- Return a journaled, code-only tool result for `read_file` decoding or text-type
+  errors on verified frozen inputs, so the model can choose another authorized tool.
+- Keep inspection of previous and current outputs, integrity failures, and unknown
+  execution windows fail-closed.
+
 ## 0.1.1.dev4
 
 - Inject native Pydantic AI models without a framework-chosen provider or model policy.

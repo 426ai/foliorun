@@ -64,6 +64,9 @@ explicit native-restore fallback eligibility is unchanged.
 
 ## Verification Scope
 
+Correctable frozen-input `read_file` errors are normal tool returns, not model
+error evidence. See [File Inspection And Safe Tool Errors](tool-errors.md).
+
 Controlled transports exercise the installed SDKs, wire serialization and
 local classification. They do not verify provider enforcement, live model
 behavior or task quality.
