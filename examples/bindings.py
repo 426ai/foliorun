@@ -4,12 +4,12 @@ from foliorun import SandboxCommand, ToolRegistry, ToolSpec
 
 
 def document_tools():
-    registry = ToolRegistry("synthetic-documents", "1", release="generic-docx-1.0.0")
+    registry = ToolRegistry("synthetic-documents", "1", release="generic-docx-2.0.0")
     registry.register(
         ToolSpec(
             name="docx_tool",
             description="Generate/revise/slice/render a fictional DOCX in the sandbox.",
-            version="1",
+            version="2",
             execution_location="sandbox",
             effect="workspace_write",
             retry_class="never_auto",
@@ -26,12 +26,13 @@ def document_tools():
                     "text": {"type": "string", "maxLength": 4096},
                     "start": {"type": "integer", "minimum": 0},
                     "end": {"type": "integer", "minimum": 1},
+                    "unit": {"type": "string", "enum": ["paragraph", "block"]},
                 },
                 "required": ["operation"],
                 "allOf": [
                     {
                         "if": {"properties": {"operation": {"const": "generate"}}},
-                        "then": {"required": ["text"]},
+                        "then": {"required": ["text"], "not": {"required": ["source"]}},
                     },
                     {
                         "if": {
@@ -46,6 +47,14 @@ def document_tools():
                     {
                         "if": {"properties": {"operation": {"const": "slice"}}},
                         "then": {"required": ["start", "end"]},
+                    },
+                    {
+                        "if": {
+                            "properties": {
+                                "operation": {"enum": ["generate", "revise", "render"]}
+                            }
+                        },
+                        "then": {"not": {"required": ["unit"]}},
                     },
                 ],
             },
