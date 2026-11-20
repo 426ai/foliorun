@@ -9,6 +9,9 @@ import stat
 import subprocess
 from pathlib import Path
 
+OUTPUT_ROOT = Path("/output")
+INPUT_ROOTS = (Path("/documents"), Path("/materials"), Path("/previous"), OUTPUT_ROOT)
+
 
 def checked(path, roots):
     p = Path(path)
@@ -26,6 +29,51 @@ def checked(path, roots):
     return p
 
 
+def slice_document(doc, start, end, unit):
+    from docx.oxml.ns import qn
+
+    if unit not in ("paragraph", "block"):
+        raise ValueError("invalid_unit")
+    if type(start) is not int or type(end) is not int:
+        raise ValueError("invalid_range")
+
+    body = doc._element.body
+    children = list(body)
+    section_tag = qn("w:sectPr")
+    section_properties = list(doc._element.iter(section_tag))
+    if (
+        len(section_properties) != 1
+        or not children
+        or children[-1].tag != section_tag
+    ):
+        raise ValueError("unsupported_sections")
+
+    block_tags = (qn("w:p"), qn("w:tbl"))
+    blocks = children[:-1]
+    if any(child.tag not in block_tags for child in blocks):
+        raise ValueError("unsupported_body_node")
+
+    if unit == "block":
+        count = len(blocks)
+    else:
+        paragraphs = [child for child in blocks if child.tag == qn("w:p")]
+        count = len(paragraphs)
+    if not 0 <= start < end <= count:
+        raise ValueError("invalid_range")
+
+    if unit == "block":
+        selected = blocks[start:end]
+    else:
+        first = blocks.index(paragraphs[start])
+        last = blocks.index(paragraphs[end - 1])
+        # Paragraph ranges include tables between their endpoint paragraphs only.
+        selected = blocks[first : last + 1]
+
+    for child in blocks:
+        if child not in selected:
+            body.remove(child)
+
+
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -35,33 +83,25 @@ def compute(args, call):
 
     if not call or any(c not in "0123456789abcdef" for c in call):
         raise ValueError("call_identity")
-    out = Path("/output") / call
+    out = OUTPUT_ROOT / call
     out.mkdir(exist_ok=False)
     operation = args["operation"]
     if operation == "generate":
         doc = Document()
-        doc.add_heading("Entirely fictional synthetic document", 0)
         doc.add_paragraph(args["text"])
         target = out / "document.docx"
         doc.save(target)
     elif operation in {"revise", "slice"}:
-        source = checked(args["source"], ["/documents", "/materials", "/previous", "/output"])
+        source = checked(args["source"], INPUT_ROOTS)
         doc = Document(source)
         if operation == "revise":
             doc.add_paragraph(args["text"])
         else:
-            start, end = args["start"], args["end"]
-            if not 0 <= start < end <= len(doc.paragraphs):
-                raise ValueError("invalid_range")
-            # Generic paragraph-only demonstration, not a product document splitter.
-            result = Document()
-            for p in doc.paragraphs[start:end]:
-                result.add_paragraph(p.text)
-            doc = result
+            slice_document(doc, args["start"], args["end"], args.get("unit", "paragraph"))
         target = out / "document.docx"
         doc.save(target)
     elif operation == "render":
-        source = checked(args["source"], ["/documents", "/materials", "/previous", "/output"])
+        source = checked(args["source"], INPUT_ROOTS)
         subprocess.run(
             [
                 "libreoffice",
@@ -110,7 +150,7 @@ def compute(args, call):
 def seal(paths):
     if len(paths) != len(set(paths)) or not paths:
         raise ValueError("invalid_submission")
-    root = Path("/output")
+    root = OUTPUT_ROOT
     # No process can still write: gateway only exposes synchronous fixed commands.
     for p in sorted(root.rglob("*"), reverse=True):
         if p.is_symlink() or not (p.is_dir() or p.is_file()):
@@ -147,12 +187,21 @@ def selfcheck():
     subprocess.run(["pandoc", "--version"], check=True, stdout=subprocess.DEVNULL)
     compute({"operation": "generate", "text": "Fictional selfcheck specimen"}, "a1")
     compute(
-        {"operation": "slice", "source": "/output/a1/document.docx", "start": 0, "end": 1}, "a2"
+        {
+            "operation": "slice",
+            "source": str(OUTPUT_ROOT / "a1" / "document.docx"),
+            "start": 0,
+            "end": 1,
+        },
+        "a2",
     )
-    compute({"operation": "render", "source": "/output/a2/document.docx"}, "a3")
-    p = Path("/output/a3/document.pdf")
+    compute(
+        {"operation": "render", "source": str(OUTPUT_ROOT / "a2" / "document.docx")},
+        "a3",
+    )
+    p = OUTPUT_ROOT / "a3" / "document.pdf"
     assert p.read_bytes().startswith(b"%PDF")
-    assert Path("/output/a3/preview.png").read_bytes().startswith(b"\x89PNG")
+    assert (OUTPUT_ROOT / "a3" / "preview.png").read_bytes().startswith(b"\x89PNG")
     subprocess.run(["pdfinfo", str(p)], check=True, stdout=subprocess.DEVNULL)
     print(json.dumps({"selfcheck": "passed", "harness_absent": True}))
 
