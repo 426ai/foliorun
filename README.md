@@ -15,10 +15,10 @@ flowchart LR
     runtime --> temporal["Temporal"]
     temporal --> worker["Host worker"]
     worker --> harness["Pydantic AI"]
-    harness --> model["OpenRouter"]
+    harness --> model["Host-injected native Model"]
     harness --> gateway["Tool gateway"]
     gateway --> hostTool["Injected host handlers"]
-    gateway --> sandbox["OpenSandbox: injected preinstalled bindings"]
+    gateway --> sandbox["OpenSandbox: host-selected image and preinstalled bindings"]
     worker --> blobs["BlobStore"]
     worker --> index["SessionRepository: transactions, CAS, fences"]
     runtime --> index
@@ -31,6 +31,11 @@ Default storage is private local FS plus SQLite FULL/WAL. Storage protocols also
 accept caller-owned implementations. No external database or `WorkspacePool`
 is required. The application owns authorization and deployment; a `scope` is
 not an authentication mechanism.
+
+Foliorun standardizes execution, tool and file boundaries, collection, and
+session save/restore interfaces. Harnesses own their native configuration and
+checkpoint formats; a checkpoint does not translate between Harnesses. The
+core install does not include any Harness or provider SDK.
 
 ## Install And Run Offline
 
@@ -52,6 +57,8 @@ For a complete two-round execution using the real Pydantic Harness with a
 
 ```sh
 python -m pip install ".[pydantic-ai]"
+python examples/offline_injection.py
+python examples/offline_exec.py
 python examples/offline_session.py
 ```
 
@@ -61,6 +68,11 @@ Expected output:
 offline session: 2 revisions, 2 fresh sandboxes, original input and native history
 ```
 
+The injection example runs two fictional model/image pairs through the same
+Runtime and checks submission and collection for both. It uses a synthetic
+sandbox; SDK request serialization is covered separately by offline tests.
+The execution example binds an explicit sandbox entrypoint, creates an output
+through that tool, and verifies the collected bytes.
 The synthetic transports are examples, not supported production adapters.
 The installed wheel contains Python code; examples, Skills and image sources
 are in the checkout/sdist.
@@ -111,6 +123,9 @@ Input roots: `/documents`, `/materials`, `/inputs`, `/skills`. Inputs and
 returns size and SHA-256 for a known input, previous file or current `/output`
 file. `read_file` reads UTF-8 text from those same paths, using Unicode character
 offsets and bounded JSON pages. Follow `next_offset` until `eof` is true.
+If a verified frozen input is not supported UTF-8 text, `read_file` returns a
+[code-only error](docs/tool-errors.md) so the model can choose an authorized
+alternative in the same run.
 Current outputs are read inside this run's sandbox; input text comes from the
 verified VFS. Workspace files, other runs, links and arbitrary host paths are
 not readable through these interfaces. Output inspection does not seal or submit.
@@ -179,8 +194,9 @@ argv; the model supplies only schema-validated arguments, never executable
 paths or commands. See [`examples/bindings.py`](examples/bindings.py) for DOCX.
 Its optional `source` parameter is explicitly bound through `input_paths`.
 Tools must be foreground, synchronous preinstalled programs with no background
-writers. The supplied generic sealer can also be replaced with trusted
-`seal_argv` for a reviewed image.
+writers. Supply a trusted `seal_argv` implementing the adapter's output seal
+contract. The example image includes such a sealer; the adapter has no default
+tool or sealer command.
 
 External-effect handlers require their own idempotency implementation or
 explicit repeat permission before whole-round fallback. Declaring
@@ -309,37 +325,57 @@ lifecycle and limitations.
 
 ## Production Assembly
 
-Install `.[temporal,pydantic-ai,opensandbox]`, prepare reviewed services and an
-immutable image, then use [`examples/client.py`](examples/client.py). Importing
-the package does not start or deploy services. This example requires explicit
-`--allow-live`.
+Build your model and sandbox bindings independently on the trusted host:
 
-Create a `Profile` with `name`, `version`, immutable `image`, `image_manifest`,
-`skills_manifest`, and `allowed_tools` from your deployment, then serialize with
-`profile.model_dump_json()`. Keep the generated format fields unchanged.
-`image_manifest` is deployment metadata, not an independently verified image
-inventory. `skills_manifest` is checked against the image's listed Skill bytes.
-Build instructions and trust boundaries are in [image/README.md](image/README.md).
+```python
+from foliorun import Profile
+from foliorun.adapters.opensandbox import OpenSandboxProvider
+from foliorun.adapters.pydantic_ai import PydanticHarness
 
-The example reads `TEMPORAL_ADDRESS`, optional `TEMPORAL_NAMESPACE`,
-`OPENSANDBOX_ENDPOINT` (host:port, HTTP), `OPENSANDBOX_API_KEY`,
-`OPENROUTER_API_KEY`. Keep keys out of profiles, VFS, logs and sandboxes.
-Use an isolated task queue with matching workers.
+profile = Profile(
+    name="fictional-documents",
+    version="host-config-1",
+    model=native_model.model_name,
+    image=reviewed_image_ref,
+    allowed_tools=tuple(approved_tool_names),
+)
+harness = PydanticHarness(model=native_model)
+sandbox = OpenSandboxProvider(
+    connection=sandbox_connection,
+    owner=worker_owner,
+    tools=preinstalled_bindings,
+    seal_argv=reviewed_seal_argv,
+)
+```
 
-The real model adapter uses only OpenRouter
-`deepseek/deepseek-v4.1-flash-1017`, with OpenAI client retries disabled and a US
-egress check. A trusted host `model_factory` can inject controlled transports;
-the offline example uses it for FunctionModel, not another production provider.
+Construct `native_model` using your provider's Pydantic AI SDK integration and
+native settings. `model_factory=` may supply a native model per round instead;
+see [operations](docs/operations.md) for client ownership and binding versioning.
+The harness does not infer a provider/model, probe for a region, or add model
+fallback, token ceilings, temperature or reasoning settings. Keep credentials
+in host clients, not in the profile, prompt, VFS, sandbox or logs.
+
+`Profile.image` is required and passed unchanged to the OpenSandbox SDK. Use
+references your service accepts; prefer an immutable, reviewed digest when you
+need reproducibility. The reference does not itself attest to image contents.
+Use compatible root bootstrap, an `app` user, Python for output inspection,
+approved tool programs and a trusted sealer; an arbitrary image is not a tool
+environment. `verify_image=` lets the host check image-specific assets.
+The DOCX example supplies its own Skill-manifest verifier.
+
+[`examples/client.py`](examples/client.py) assembles the worker with an
+OpenAI-compatible model chosen by the host **as one example**, not a core
+requirement. Install `.[temporal,pydantic-ai-openai,opensandbox]` for that
+example. Use `python examples/client.py --help` to inspect its CLI without
+contacting services; a live run requires `--allow-live`, explicit host
+configuration and prior authorization. See [operations](docs/operations.md)
+and the [example image instructions](image/README.md).
 
 Default `Limits.model_requests` and `Limits.tools` are **None/None**.
 The SDK receives both values explicitly, avoiding its default 50-request limit.
 Positive integers are optional, strict limits.
 File, byte, command and deadline safety constraints still apply.
 
-Optional `Profile.model_settings=ModelConfig(...)` configures the per-response
-`max_tokens` ceiling and declared `reasoning_effort`. Omitted configuration
-uses a ceiling of 1800; explicit `ModelConfig()` omits it from requests and
-uses the provider default. No larger constant is silently substituted.
 `RunResult.error` is a stable failure code. Optional `error_detail` carries
 finite model failure evidence without SDK messages or bodies; tool/path errors
 use `error` and leave `error_detail` null. `NEEDS_REVIEW` requires host

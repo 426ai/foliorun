@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.1.dev5
+
+- Return a journaled, code-only tool result for `read_file` decoding or text-type
+  errors on verified frozen inputs, so the model can choose another authorized tool.
+- Keep inspection of previous and current outputs, integrity failures, and unknown
+  execution windows fail-closed.
+
+## 0.1.1.dev4
+
+- Inject native Pydantic AI models without a framework-chosen provider or model policy.
+- Separate Pydantic AI SDK and optional OpenAI provider dependencies.
+- Pass the host image reference through OpenSandbox, with explicit tool/sealer bindings.
+- Use a distinct profile schema for public binding metadata without native settings or
+  image-specific manifests. Old profile bindings require explicit reconfiguration.
+
 ## 0.1.0
 
 - Route bounded `read_file` and new `stat_file` inspection to the current run's

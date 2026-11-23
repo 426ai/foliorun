@@ -116,7 +116,7 @@ async def test_native_tools_produce_inspect_read_then_submit(case, tmp_path):
             pass
 
     case.executor.harness = PydanticHarness(
-        model_factory=lambda: (Client(), FunctionModel(respond))
+        model_factory=lambda: (Client(), FunctionModel(respond, model_name=case.profile.model))
     )
     result = await execute(case)
     assert result.status == "SUCCEEDED", result.error

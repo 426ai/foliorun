@@ -2,17 +2,12 @@
 
 ## Source Compatibility
 
-The public distribution version is **0.1.0**. Earlier source snapshots also
-used this version and are not interchangeable. Identify an installation by
-its full source commit and archive SHA-256, in addition to its version.
-Preserve earlier archives instead of overwriting them. Development candidates
-are separate artifacts and are not republished under their candidate names.
-
-Persisted profile compatibility markers, native checkpoint formats and adapter
-identities are intentionally unchanged. The generated `package_version` and distribution version are both `0.1.0`;
-keep other generated compatibility fields unchanged. Use `Profile` and
-`model_dump_json()` to produce metadata, and keep original bytes for old objects.
-Existing checkpoint readers and explicit compatibility paths still apply.
+The profile schema is `0.4`. It intentionally does not reproduce `0.3` profile
+hashes or accept those serialized profiles as current bindings. The JobSpec,
+handle, and session wire protocol is still `0.3`; the native Pydantic messages
+and checkpoint envelope are unchanged. The profile's `package_version` is a
+historical format marker, not the installed distribution version. Keep original
+bytes for old objects and do not rewrite job or session references.
 
 ## Output Inspection And Tool Errors
 
@@ -43,44 +38,52 @@ Product adapters should allowlist the finite codes and statuses in
 [tool/path errors](tool-errors.md), retaining `unknown` for unclassified
 failures. `error_detail` stays null for these failures; do not manufacture a
 model cause. Offline validation does not establish live workflow acceptance.
-There are no session, GC, model, count or monetary budget changes.
+Session, GC and count-limit behavior is otherwise unchanged.
 
-## Model Configuration
+## Reconfigure Host Bindings
 
-An omitted or null `model_settings` preserves the old request ceiling of 1800
-and the exact old profile serialization/binding hash. Upgrading the wheel alone
-does **not** change that ceiling. Existing count semantics remain unchanged:
-model requests and tools default to no count limit; positive strict integers
-remain optional.
-
-To opt in, construct a **new profile version** with an explicit `ModelConfig`:
+Build a fresh `Profile` with an explicit `model` and `image` and the desired
+allowlist, limits, retention, and binding version. In Pydantic AI, `model` must
+match the injected native `Model.model_name`. Replace `openrouter_api_key=`,
+`openrouter_model` and `egress_check` with a host-constructed Model or trusted
+`model_factory=`. Do not pass SDK model names as lazy lookup strings to the
+harness or add provider credentials to a profile.
 
 ```python
-from foliorun import ModelConfig, Profile
+from foliorun import Profile
+from foliorun.adapters.pydantic_ai import PydanticHarness
 
-new_profile = Profile.model_validate(
-    old_profile.model_dump() | {
-        "version": "host-reviewed-model-settings",
-        "model_settings": ModelConfig(
-            max_tokens=None,
-            reasoning_effort="low",
-        ).model_dump(),
-    }
+new_profile = Profile(
+    name="fictional-documents",
+    version="new-host-binding",
+    model=native_model.model_name,
+    image=reviewed_image_ref,
+    allowed_tools=tuple(approved_tool_names),
 )
+harness = PydanticHarness(model=native_model)
 ```
 
-Here `None` omits the per-response ceiling, leaving the provider default, and
-`low` requests the model's declared effort level. Neither guarantees enough
-visible output. A host may instead set a reviewed positive `max_tokens` based
-on its workload and available context. These settings are not request or
-monetary budgets. Exact reasoning-token allocation is not exposed.
+`Profile.model_settings` and `foliorun.ModelConfig` are removed. Configure
+caps, reasoning and routing on the native model and provider. The old 1800
+output-token ceiling is **not** retained automatically. To reproduce that
+policy, explicitly use native `settings={"max_tokens": 1800}` on a suitable
+model. Review reasoning settings against the selected SDK/provider; the old
+`reasoning_effort` values are not silently translated. The framework does not
+impose a monetary budget. Request/tool counts still default to unbounded.
 
-Explicit settings, even `{}`, participate in the profile binding and job
-fingerprint. Install the same serialized profile on submitters and workers.
-Use a fresh idempotency key and a new session for changed settings. Existing
-session continuation requires the exact original binding; it fails closed on
-changes. Old in-flight work must retain its original profile and worker.
-No session rewriting, GC changes or in-place job migration is provided.
+Replace `OpenSandboxProvider(api_key=..., endpoint=...)` with explicit native
+`ConnectionConfig`, `owner`, `seal_argv`, and any tool mappings. Removed
+`image_manifest` was not verified. Replace removed `skills_manifest` with an
+explicit `verify_image` hook if the deployment requires verified image Skills;
+the DOCX example does this. An image tag can be valid yet mutable, so pin and
+verify the deployed image separately when reproducibility matters.
+
+Native settings are not hashed. Assign a new public profile `version` when
+changing host policy not represented in the profile fields. Existing sessions
+with an old binding do not transparently continue. Use a fresh idempotency key
+and session for the new binding. Finish old in-flight jobs with matching old
+workers and queues. No in-place job or session migration is provided for `0.3`
+profiles, and compatible native bytes alone do not establish compatible routing.
 
 Read `RunResult.error` as the stable code and optional `error_detail` as finite
 evidence. Do not serialize the SDK exception, its chain, messages or raw
@@ -104,7 +107,12 @@ old JSON, bindings or hashes. Unsupported formats fail closed.
 ```python
 from foliorun.migration import migrate_profile_v010
 
-profile = migrate_profile_v010(old_profile_bytes, source_version="0.1.0")
+profile = migrate_profile_v010(
+    old_profile_bytes,
+    source_version="0.1.0",
+    model=native_model.model_name,
+    image=reviewed_image_ref,
+)
 assert profile.limits.model_requests == 8  # When absent in the legacy profile.
 ```
 

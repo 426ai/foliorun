@@ -5,6 +5,7 @@ import json
 
 import httpx
 import pytest
+from openai import AsyncOpenAI
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import (
     ContentFilterError,
@@ -22,6 +23,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
 
 from foliorun import (
     FallbackPolicy,
@@ -35,13 +38,13 @@ from foliorun import (
 from foliorun.adapters.pydantic_ai import (
     JournalModel,
     PydanticHarness,
-    openrouter_model,
     safe_model_error,
 )
-from foliorun.contracts import MODEL, BlobRef, JobSpec, canonical
+from foliorun.contracts import BlobRef, JobSpec, canonical
 from foliorun.tools import Gateway
 
 PRIVATE = "synthetic-private-marker"
+MODEL = "fictional-model"
 
 
 def completion(*, finish_reason="length", reasoning=True):
@@ -63,10 +66,20 @@ def completion(*, finish_reason="length", reasoning=True):
     }
 
 
-def model_factory(serve):
-    return lambda: openrouter_model(
-        "fictional-only", http_client=httpx.AsyncClient(transport=httpx.MockTransport(serve))
-    )
+def model_factory(serve, *, settings=None, profile=None):
+    def create():
+        client = AsyncOpenAI(
+            api_key="fictional-only",
+            base_url="https://model.example.test/v1",
+            max_retries=0,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(serve)),
+        )
+        model = OpenAIChatModel(
+            MODEL, provider=OpenAIProvider(openai_client=client), profile=profile, settings=settings
+        )
+        return client, model
+
+    return create
 
 
 @pytest.mark.parametrize("reasoning", [False, True])
@@ -106,7 +119,7 @@ async def test_framework_classifies_truncation(case, reasoning):
     assert result.error_detail.model_request_index == 1
     assert not result.artifacts and not result.session_version
     assert len(payloads) == 1
-    assert payloads[0]["max_tokens"] == 1800
+    assert "max_tokens" not in payloads[0] and "max_completion_tokens" not in payloads[0]
     state = case.store.get_record("run/" + result.handle.run_id)[1]
     assert not case.runtime.session_versions(case.executor.job(state).session_id)
 
@@ -466,7 +479,8 @@ async def test_close_failure_cannot_hide_classified_truncation(case):
             FunctionModel(
                 lambda messages, info: ModelResponse(
                     parts=[TextPart("Partial")], finish_reason="length"
-                )
+                ),
+                model_name=case.profile.model,
             ),
         )
     )

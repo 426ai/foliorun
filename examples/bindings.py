@@ -1,6 +1,40 @@
 """Explicit worker deployment bindings; all records are entirely fictional."""
 
-from foliorun import SandboxCommand, ToolRegistry, ToolSpec
+import json
+
+from foliorun import RuntimeFault, SandboxCommand, ToolRegistry, ToolSpec
+from foliorun.adapters.opensandbox import OpenSandboxProvider, PreinstalledTool, download_binary
+from foliorun.contracts import digest, path_checked
+
+DOCUMENT_TOOL = ("python", "/opt/document-tools/tool.py")
+
+
+def document_sandbox(connection, *, owner, skills_sha256):
+    async def verify_image(session, profile):
+        try:
+            body = await download_binary(
+                session.box, "/opt/document-tools/skills-manifest.json", 65536
+            )
+            if digest(body) != skills_sha256:
+                raise ValueError
+            for relative, expected in json.loads(body)["files"].items():
+                path = path_checked("/skills/" + relative)
+                data = await download_binary(session.box, path, 131072)
+                if digest(data) != expected:
+                    raise ValueError
+        except Exception:
+            pass
+        else:
+            return
+        raise RuntimeFault("image_skills_mismatch")
+
+    return OpenSandboxProvider(
+        connection=connection,
+        owner=owner,
+        tools={"docx": PreinstalledTool((*DOCUMENT_TOOL, "execute"))},
+        seal_argv=(*DOCUMENT_TOOL, "seal"),
+        verify_image=verify_image,
+    )
 
 
 def document_tools():
@@ -50,7 +84,7 @@ def document_tools():
                 ],
             },
         ),
-        SandboxCommand(),
+        SandboxCommand(entrypoint="docx"),
     )
 
     async def lookup(args, ctx):

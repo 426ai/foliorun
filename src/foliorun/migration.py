@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from . import legacy
 from .contracts import (
+    PROFILE_SCHEMA,
     BlobRef,
     Checkpoint,
     InputFile,
@@ -46,13 +47,15 @@ def read_legacy_checkpoint(body):
     return _read(body, legacy.Checkpoint, "legacy-output-only")
 
 
-def migrate_profile_v010(body, *, source_version):
+def migrate_profile_v010(body, *, source_version, model: str, image: str):
     if source_version != "0.1.0":
         raise RuntimeFault("unsupported_migration_source")
     old = read_legacy_profile(body).value
     data = old.model_dump()
-    data.pop("capabilities")
-    data["schema_version"] = "0.3"
+    for removed in ("capabilities", "image_manifest", "skills_manifest"):
+        data.pop(removed)
+    data.update(model=model, image=image)
+    data["schema_version"] = PROFILE_SCHEMA
     return Profile.model_validate(data)
 
 

@@ -2,15 +2,18 @@
 
 import asyncio
 import io
+import json
 import shlex
 import sys
 import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import httpx
 import pytest
+from opensandbox.config import ConnectionConfig
 
-from foliorun import LocalSessionRepository, RuntimeFault, S3BlobStore, Storage
+from foliorun import LocalSessionRepository, Profile, RuntimeFault, S3BlobStore, Storage
 from foliorun.adapters import opensandbox as adapter
 from foliorun.collection import Collector
 from foliorun.contracts import canonical, digest
@@ -52,8 +55,9 @@ async def test_provider_really_dispatches_two_different_preinstalled_programs(ca
 
     monkeypatch.setattr(adapter.Sandbox, "create", create)
     provider = adapter.OpenSandboxProvider(
-        api_key="synthetic-not-a-credential",
-        endpoint="example.test",
+        connection=ConnectionConfig(api_key="synthetic-not-a-credential", domain="example.test"),
+        owner="fictional-test",
+        seal_argv=("/fictional/seal",),
         tools={
             "uppercase": adapter.PreinstalledTool((sys.executable, "-c", upper)),
             "reverse": adapter.PreinstalledTool((sys.executable, "-c", reverse)),
@@ -76,6 +80,102 @@ async def test_provider_really_dispatches_two_different_preinstalled_programs(ca
     with pytest.raises(RuntimeFault, match="sandbox_binding_unavailable"):
         await box.execute(SandboxCommand(entrypoint="missing"), {}, "three", case.profile.limits)
     assert len(commands) == 2
+
+
+@pytest.mark.parametrize("image", ["registry.example.test/fictional:blue", "sha256:" + "f" * 64])
+async def test_sdk_create_receives_exact_image_without_default_business_config(case, image):
+    profile = Profile.model_validate(case.profile.model_dump() | {"image": image})
+    assert profile.ref() != case.profile.ref()
+    key = "fictional-sandbox-key"
+    metadata = {"owner": "fictional-worker", "scope": case.store.scope, "run_id": "fictional-run"}
+    receipt = {
+        "id": "fictional-id",
+        "metadata": metadata,
+        "status": {"state": "Running"},
+        "entrypoint": ["/fictional/keepalive"],
+        "createdAt": datetime.now(UTC).isoformat(),
+        "expiresAt": (datetime.now(UTC) + timedelta(hours=2)).isoformat(),
+    }
+    creates = []
+
+    def serve(request):
+        path = request.url.path
+        if request.url.host == "execd.example.test":
+            assert request.headers.get("open-sandbox-api-key") is None
+            assert path == "/ping"
+            return httpx.Response(200)
+        assert request.url.host == "sandbox.example.test"
+        assert request.headers["open-sandbox-api-key"] == key
+        if request.method == "POST":
+            assert path == "/v1/sandboxes"
+            body = json.loads(request.content)
+            assert body["image"] == {"uri": image}
+            assert body["metadata"] == metadata
+            assert body["entrypoint"] == ["/fictional/keepalive"]
+            assert body["resourceLimits"] == {"cpu": "2", "memory": "3Gi"}
+            assert not body.get("env") and key not in request.content.decode()
+            creates.append(body)
+            return httpx.Response(202, json=receipt)
+        if "/endpoints/" in path:
+            return httpx.Response(200, json={"endpoint": "execd.example.test"})
+        assert path == "/v1/sandboxes/fictional-id"
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(200, json=receipt | {"image": {"uri": image}})
+
+    connection = ConnectionConfig(
+        api_key=key,
+        domain="sandbox.example.test",
+        protocol="https",
+        transport=httpx.MockTransport(serve),
+    )
+    provider = adapter.OpenSandboxProvider(
+        connection=connection,
+        owner=metadata["owner"],
+        seal_argv=("/fictional/seal",),
+        resource={"cpu": "2", "memory": "3Gi"},
+        entrypoint=("/fictional/keepalive",),
+    )
+    session = await provider.create(profile, metadata["run_id"], case.store.scope)
+    try:
+        assert session.tools == {} and session.seal_argv == ("/fictional/seal",)
+        assert len(creates) == 1
+    finally:
+        await session.destroy()
+
+
+async def test_image_protocol_verification_is_explicit_and_prepare_reads_no_manifest(case):
+    commands = []
+
+    async def command(text, opts):
+        commands.append(shlex.split(text))
+        return SimpleNamespace(error=None, exit_code=0, text="")
+
+    box = SimpleNamespace(id="fictional", commands=SimpleNamespace(run=command))
+    session = adapter.OpenSandboxSession(box)
+    await session.prepare({"/skills/fictional/SKILL.md": None}, case.store, case.profile)
+    assert ["chown", "app:app", "/output", "/workspace"] in commands
+    assert ["rm", "-rf", "/skills"] in commands
+    assert ["chmod", "0555", "/skills"] in commands
+    with pytest.raises(RuntimeFault, match="sandbox_seal_binding_required"):
+        await session.seal(["/output/fictional"], case.profile.limits)
+
+
+@pytest.mark.parametrize(
+    "settings,code",
+    [
+        ({"domain": ""}, "opensandbox_endpoint_required"),
+        ({"api_key": ""}, "opensandbox_key_required"),
+    ],
+)
+def test_sandbox_connection_does_not_fall_back_to_sdk_environment(settings, code, monkeypatch):
+    monkeypatch.setenv("OPEN_SANDBOX_API_KEY", "fictional-env-key")
+    monkeypatch.setenv("OPEN_SANDBOX_DOMAIN", "fallback.example.test")
+    connection = ConnectionConfig(**({"api_key": "fictional", "domain": "example.test"} | settings))
+    with pytest.raises(RuntimeFault, match=code):
+        adapter.OpenSandboxProvider(
+            connection=connection, owner="fictional", seal_argv=("/fictional/seal",)
+        )
 
 
 async def test_provider_rejects_service_ttl_shorter_than_recovery_window():

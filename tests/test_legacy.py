@@ -40,11 +40,14 @@ def test_legacy_sparse_profile_is_read_only_8_20_and_explicit_upgrade_distinct()
     before = record.value.ref()
     # Golden identity computed from the frozen 0.2 contract, not the new reader.
     assert before.sha256 == "0771aa09b5dee125f9a8fe6e5f0e9e19fb315664f5ef0b862c99510f05c1e736"
-    upgraded = migrate_profile_v010(body, source_version="0.1.0")
+    selected = {"model": "fictional-replacement", "image": "registry.example.test/alternate:1"}
+    upgraded = migrate_profile_v010(body, source_version="0.1.0", **selected)
     assert upgraded.limits.model_requests == 8 and upgraded.limits.tools == 20
     assert upgraded.ref().sha256 != before.sha256
     assert read_legacy_profile(body).value.ref() == before
-    assert upgraded.schema_version == "0.3"
+    assert upgraded.schema_version == "0.4"
+    assert upgraded.model == selected["model"] and upgraded.image == selected["image"]
+    assert "skills_manifest" not in upgraded.model_dump()
     with pytest.raises(ValidationError, match="legacy_profile_requires_explicit_migration"):
         Profile.model_validate_json(body)
     with pytest.raises(ValidationError):
@@ -55,7 +58,7 @@ def test_legacy_sparse_profile_is_read_only_8_20_and_explicit_upgrade_distinct()
         Profile.model_validate_json(json.dumps(no_marker))
     assert read_legacy_profile(json.dumps(no_marker)).value.ref() == before
     with pytest.raises(RuntimeFault, match="unsupported_migration_source"):
-        migrate_profile_v010(body, source_version="0.2.0")
+        migrate_profile_v010(body, source_version="0.2.0", **selected)
 
 
 @pytest.mark.parametrize("counts", [{"tools": None}, {"tools": 65}, {"model_requests": 17}])
