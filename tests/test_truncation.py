@@ -603,3 +603,32 @@ async def test_wrapped_openai_chat_model_strips_synthesized_finish_reason(case):
     assert result.error_detail is not None
     assert result.error_detail.finish_reason is None
     assert result.error_detail.truncated is None
+
+
+async def test_http_400_context_length_exceeded_preserves_http_status_and_cause(case, caplog):
+    def serve(request):
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "message": f"maximum context length exceeded ({PRIVATE})",
+                    "type": "invalid_request_error",
+                    "code": "context_length_exceeded",
+                }
+            },
+        )
+
+    case.executor.harness = PydanticHarness(model_factory=model_factory(serve))
+    result = await case.runtime.run(
+        prompt="Fictional HTTP 400 context overflow",
+        vfs=case.vfs,
+        tools=case.tools,
+        idempotency_key="http-400-context-overflow",
+    )
+    assert result.status == "FAILED"
+    assert result.error == "model_context_length"
+    assert result.error_detail is not None
+    assert result.error_detail.cause == "context_length"
+    assert result.error_detail.http_status == 400
+    assert result.error_detail.model_request_index == 1
+    assert PRIVATE not in result.model_dump_json() + caplog.text

@@ -60,12 +60,17 @@ def safe_model_error(exc, index=None):
         cause = "timeout"
     elif isinstance(exc, ModelHTTPError):
         cause = "http_error"
-        if type(exc.status_code) is int and 100 <= exc.status_code <= 599:
-            status = exc.status_code
     elif isinstance(exc, ModelConnectionError):
         cause = "transport_error"
     elif isinstance(exc, UnexpectedModelBehavior):
         cause = "invalid_response"
+    if isinstance(exc, ModelHTTPError):
+        if type(exc.status_code) is int and 100 <= exc.status_code <= 599:
+            status = exc.status_code
+    elif isinstance(exc, ModelContextWindowExceededError):
+        code = getattr(exc, "status_code", None)
+        if type(code) is int and 100 <= code <= 599:
+            status = code
     return SafeError(
         cause=cause,
         model_request_index=index,
