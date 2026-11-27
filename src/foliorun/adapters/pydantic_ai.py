@@ -11,6 +11,7 @@ from pydantic_ai.exceptions import (
     ContentFilterError,
     IncompleteToolCall,
     ModelConnectionError,
+    ModelContextWindowExceededError,
     ModelHTTPError,
     ModelTimeoutError,
     UnexpectedModelBehavior,
@@ -49,7 +50,9 @@ class AsyncCloseable(Protocol):
 def safe_model_error(exc, index=None):
     # Match types only. Never inspect exception messages, bodies, chains or headers.
     cause, status = "unknown", None
-    if isinstance(exc, IncompleteToolCall):
+    if isinstance(exc, ModelContextWindowExceededError):
+        cause = "context_length"
+    elif isinstance(exc, IncompleteToolCall):
         cause = "output_truncated"
     elif isinstance(exc, ContentFilterError):
         cause = "content_filter"
@@ -57,18 +60,31 @@ def safe_model_error(exc, index=None):
         cause = "timeout"
     elif isinstance(exc, ModelHTTPError):
         cause = "http_error"
-        if type(exc.status_code) is int and 100 <= exc.status_code <= 599:
-            status = exc.status_code
     elif isinstance(exc, ModelConnectionError):
         cause = "transport_error"
     elif isinstance(exc, UnexpectedModelBehavior):
         cause = "invalid_response"
+    if isinstance(exc, ModelHTTPError):
+        if type(exc.status_code) is int and 100 <= exc.status_code <= 599:
+            status = exc.status_code
+    elif isinstance(exc, ModelContextWindowExceededError):
+        code = getattr(exc, "status_code", None)
+        if type(code) is int and 100 <= code <= 599:
+            status = code
     return SafeError(
         cause=cause,
         model_request_index=index,
         http_status=status,
         truncated=True if cause == "output_truncated" else None,
     )
+
+
+def _unwrap_model(model):
+    seen = set()
+    while isinstance(model, WrapperModel) and id(model) not in seen:
+        seen.add(id(model))
+        model = model.wrapped
+    return model
 
 
 class JournalModel(WrapperModel):
@@ -82,7 +98,7 @@ class JournalModel(WrapperModel):
         chat_module = sys.modules.get("pydantic_ai.models.openai")
         if (
             chat_module is not None
-            and isinstance(self.wrapped, chat_module.OpenAIChatModel)
+            and isinstance(_unwrap_model(self.wrapped), chat_module.OpenAIChatModel)
             and not (response.provider_details or {}).get("finish_reason")
             and reason != "content_filter"
         ):
@@ -129,7 +145,13 @@ class JournalModel(WrapperModel):
                 messages, model_settings, model_request_parameters
             )
         except Exception as exc:
-            fault = RuntimeFault("unknown_model_window", detail=safe_model_error(exc, self.index))
+            detail = safe_model_error(exc, self.index)
+            code = {
+                "context_length": "model_context_length",
+                "output_truncated": "model_output_truncated",
+                "content_filter": "model_content_filtered",
+            }.get(detail.cause, "unknown_model_window")
+            fault = RuntimeFault(code, detail=detail)
         # Raise outside the handler so no raw SDK exception survives as __context__.
         if fault is not None:
             raise fault
