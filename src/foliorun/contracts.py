@@ -75,6 +75,7 @@ class SafeError(Frozen):
     """Finite evidence only; no messages, bodies, headers, IDs or exception objects."""
 
     cause: Literal[
+        "context_length",
         "output_truncated",
         "content_filter",
         "http_error",

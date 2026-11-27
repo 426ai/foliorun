@@ -11,6 +11,7 @@ from pydantic_ai.exceptions import (
     ContentFilterError,
     IncompleteToolCall,
     ModelConnectionError,
+    ModelContextWindowExceededError,
     ModelHTTPError,
     ModelTimeoutError,
     UnexpectedModelBehavior,
@@ -254,6 +255,7 @@ def test_safe_error_schema_rejects_raw_or_unbounded_fields():
 @pytest.mark.parametrize(
     "exc,cause",
     [
+        (ModelContextWindowExceededError(MODEL, PRIVATE), "context_length"),
         (IncompleteToolCall(PRIVATE), "output_truncated"),
         (ContentFilterError(PRIVATE, body=PRIVATE), "content_filter"),
         (ModelHTTPError(429, MODEL, body={"error": PRIVATE}), "http_error"),
@@ -531,3 +533,73 @@ async def test_recovery_pending_poll_exposes_safe_evidence(case):
     result = await case.runtime.get(Handle.model_validate(state["handle"]))
     assert result.status == "RECOVERY_PENDING"
     assert result.error == "adapter_failed" and result.error_detail == detail
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected_code", "expected_cause"),
+    [
+        (
+            ModelContextWindowExceededError(MODEL, PRIVATE),
+            "model_context_length",
+            "context_length",
+        ),
+        (
+            IncompleteToolCall(PRIVATE),
+            "model_output_truncated",
+            "output_truncated",
+        ),
+        (
+            ContentFilterError(PRIVATE, body=PRIVATE),
+            "model_content_filtered",
+            "content_filter",
+        ),
+    ],
+)
+async def test_request_terminal_sdk_exceptions_classify_without_unknown_window(
+    case, exc, expected_code, expected_cause, caplog
+):
+    def respond(messages, info):
+        raise exc
+
+    case.executor.harness = PydanticHarness(
+        model=FunctionModel(respond, model_name=case.profile.model)
+    )
+    result = await case.runtime.run(
+        prompt="Fictional terminal request failure",
+        vfs=case.vfs,
+        tools=case.tools,
+        idempotency_key=f"terminal-{expected_code}",
+    )
+    assert result.status == "FAILED"
+    assert result.error == expected_code
+    assert result.error_detail is not None
+    assert result.error_detail.cause == expected_cause
+    assert result.error_detail.model_request_index == 1
+    assert not result.artifacts and result.session_version is None
+    assert PRIVATE not in result.model_dump_json() + caplog.text
+
+
+async def test_wrapped_openai_chat_model_strips_synthesized_finish_reason(case):
+    from pydantic_ai.models.wrapper import WrapperModel
+
+    class _PassthroughWrapper(WrapperModel):
+        pass
+
+    def create():
+        client, model = model_factory(
+            lambda request: httpx.Response(200, json=completion(finish_reason=None))
+        )()
+        return client, _PassthroughWrapper(model)
+
+    case.executor.harness = PydanticHarness(model_factory=create)
+    result = await case.runtime.run(
+        prompt="Fictional wrapped missing finish reason",
+        vfs=case.vfs,
+        tools=case.tools,
+        idempotency_key="wrapped-missing-finish",
+    )
+    assert result.status == "FAILED"
+    assert result.error == "model_response_invalid"
+    assert result.error_detail is not None
+    assert result.error_detail.finish_reason is None
+    assert result.error_detail.truncated is None

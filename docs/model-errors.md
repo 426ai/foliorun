@@ -23,7 +23,7 @@ inside this detail:
 
 | Field | Values |
 | --- | --- |
-| `cause` | `output_truncated`, `content_filter`, `http_error`, `timeout`, `transport_error`, `invalid_response`, `unknown` |
+| `cause` | `context_length`, `output_truncated`, `content_filter`, `http_error`, `timeout`, `transport_error`, `invalid_response`, `unknown` |
 | `finish_reason` | normalized `length`, `stop`, `tool_call`, `content_filter`, `error`, or null |
 | `truncated` | true for proven truncation, false for observed non-length termination, null when not established |
 | `model_request_index` | positive per-attempt request ordinal or null |
@@ -37,6 +37,7 @@ Native journal/checkpoint storage remains private and is not an error payload.
 
 | Code | Status | Evidence and behavior |
 | --- | --- | --- |
+| `model_context_length` | `FAILED` | SDK `ModelContextWindowExceededError`; request rejected before completion |
 | `model_output_truncated` | `FAILED` | Completed response with `length`, or SDK `IncompleteToolCall`; no tool dispatch from the truncated response |
 | `model_content_filtered` | `FAILED` | Explicit finish reason or SDK content-filter type |
 | `model_response_invalid` | `FAILED` | Completed response rejected by the SDK, or normalized provider `error`; no invented truncation cause |

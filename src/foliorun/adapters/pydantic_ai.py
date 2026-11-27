@@ -11,6 +11,7 @@ from pydantic_ai.exceptions import (
     ContentFilterError,
     IncompleteToolCall,
     ModelConnectionError,
+    ModelContextWindowExceededError,
     ModelHTTPError,
     ModelTimeoutError,
     UnexpectedModelBehavior,
@@ -49,7 +50,9 @@ class AsyncCloseable(Protocol):
 def safe_model_error(exc, index=None):
     # Match types only. Never inspect exception messages, bodies, chains or headers.
     cause, status = "unknown", None
-    if isinstance(exc, IncompleteToolCall):
+    if isinstance(exc, ModelContextWindowExceededError):
+        cause = "context_length"
+    elif isinstance(exc, IncompleteToolCall):
         cause = "output_truncated"
     elif isinstance(exc, ContentFilterError):
         cause = "content_filter"
@@ -71,6 +74,14 @@ def safe_model_error(exc, index=None):
     )
 
 
+def _unwrap_model(model):
+    seen = set()
+    while isinstance(model, WrapperModel) and id(model) not in seen:
+        seen.add(id(model))
+        model = model.wrapped
+    return model
+
+
 class JournalModel(WrapperModel):
     def __init__(self, model, gateway):
         super().__init__(model)
@@ -82,7 +93,7 @@ class JournalModel(WrapperModel):
         chat_module = sys.modules.get("pydantic_ai.models.openai")
         if (
             chat_module is not None
-            and isinstance(self.wrapped, chat_module.OpenAIChatModel)
+            and isinstance(_unwrap_model(self.wrapped), chat_module.OpenAIChatModel)
             and not (response.provider_details or {}).get("finish_reason")
             and reason != "content_filter"
         ):
@@ -129,7 +140,13 @@ class JournalModel(WrapperModel):
                 messages, model_settings, model_request_parameters
             )
         except Exception as exc:
-            fault = RuntimeFault("unknown_model_window", detail=safe_model_error(exc, self.index))
+            detail = safe_model_error(exc, self.index)
+            code = {
+                "context_length": "model_context_length",
+                "output_truncated": "model_output_truncated",
+                "content_filter": "model_content_filtered",
+            }.get(detail.cause, "unknown_model_window")
+            fault = RuntimeFault(code, detail=detail)
         # Raise outside the handler so no raw SDK exception survives as __context__.
         if fault is not None:
             raise fault
